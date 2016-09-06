@@ -1,0 +1,108 @@
+import math
+from scipy import interpolate
+
+class YieldCurve(object):
+    """ Designed to be used with live bond quotes,
+        but can also be used with yield quotes using the yield_to_instruments method"""
+    
+    def __init__(self, maturities=[], yields=[]):
+        self.zero_rates=dict()
+        self.instruments=dict()
+        self.__maturities__ = maturities
+        self.__yields__ = yields
+        
+    def add_instrument(self, par, T, coup, price, compounding_freq=2):
+        """Save instruments by maturity"""
+        self.instruments[T] = (par, coup, price, compounding_freq)
+
+    def get_maturities(self):
+            return sorted(self.instruments.keys())
+            
+    def yield_to_instruments(self):
+        """ If we start with a set of maturities and par yields:
+            Create a par curve and create instruments from that """
+        if len(self.__maturities__)!=len(self.__yields__):
+            print "Length of maturities vector must be the same as length of yield vector"
+            return ""
+        
+        ##Interpolate yields and maturities to six-month intervals
+        yld=self.__yields__
+        mat=self.__maturities__
+        interp_function = interpolate.interp1d(mat, yld)
+        mat2=range(0, max(mat)*2+1)
+        mat2=[float(x)/2 for x in mat2]
+        parYld2 = interp_function(mat2)
+        
+        ## Create instruments from par yields
+        self.add_instrument(100, mat2[1], 0, (100./(1+parYld2[1]/100)**(mat2[1])))
+        for i in range(2, len(mat2)):
+            self.add_instrument(100, mat2[i], parYld2[i], 100)
+        
+    def get_forward_rates(self, term):
+        """Term is how far forward goes (3-5 would be 2 year forward term)"""
+        spots=self.get_zero_rates()
+        mats=self.get_maturities()
+        fwds=[]
+        for i in range(0, len(spots)-2*term):
+            rt=(((1+spots[i+2*term]) **mats[i+2*term])/((1+spots[i])**mats[i]))**(1./term)-1
+            fwds.append(rt)
+        return fwds
+        
+    def get_zero_rates(self):
+        """calculate a list of available zero rates"""
+        self.__bootstrap_zero_coupons__()
+        self.__get_bond_spot_rates__()
+        return [self.zero_rates[T] for T in self.get_maturities()]
+        
+    def __bootstrap_zero_coupons__(self):
+        """ Get zero rates from the zero-coupon bonds"""
+        for T in self.instruments.iterkeys():
+            (par, coup, price, freq) = self.instruments[T]
+            if coup == 0:
+                self.zero_rates[T] = self.zero_coupon_spot_rate(par, price, T)
+                    
+    def __get_bond_spot_rates__(self):
+        """Get spot rates for every maturity you have"""
+        for T in self.get_maturities():
+            instrument=self.instruments[T]
+            (par, coup, price, freq) = instrument
+                
+            if coup!=0:
+                self.zero_rates[T] = self.__calculate_bond_spot_rate__(T, instrument)
+        
+    def __calculate_bond_spot_rate__(self, T, instrument):
+        """ Get spot rate of a bond by bootstrapping """
+        try:
+            (par, coup, price, freq) = instrument
+            periods = T*freq
+            value = price
+            per_coupon = coup/freq
+                
+            for i in range(int(periods) - 1):
+                t = (i+1)/float(freq)
+                spot_rate = self.zero_rates[t]
+                discounted_coupon = per_coupon * math.exp(-spot_rate*t)
+                value-=discounted_coupon
+                
+            last_period=int(periods)/float(freq)
+            spot_rate = -math.log(value/(par+per_coupon))/last_period
+            return spot_rate
+        except:
+            print "Error: spot rate not found for T=%s" %t
+        
+    def zero_coupon_spot_rate(self, par, price, T):
+        """ Get zero rate of a zero-coupon bond """
+        spot_rate = math.log(par/price)/T
+        return spot_rate
+
+"""
+##Examples:
+import matplotlib.pyplot as plt
+nmat=[0, .25, .5, 1, 2, 3, 5, 7, 10, 20, 30]
+nparY=[0, .33, .45, .59, .80, .92, 1.20, 1.47, 1.60, 1.95, 2.28]
+
+nYC=YieldCurve(nmat, nparY)
+nYC.yield_to_instruments()
+plt.plot(nYC.get_maturities(), nYC.get_zero_rates())
+plt.plot(nYC.get_maturities()[2:], nYC.get_forward_rates(1))
+"""
