@@ -1,0 +1,85 @@
+import datetime
+from dateutil import relativedelta
+import math
+from scipy import interpolate
+
+class Bond(object):
+    """ Bond object. 
+    Takes either issue datetime, 
+                 maturity datetime (must be after issue) and 
+                 coupon (assumes semiannual coupon)
+        or takes dict of cashflows: keys are datetimes
+    Want to include:
+        -Pricing mechanism (when passed a yield curve object)
+        -duration calculator (when passed a yield curve object)"""
+    
+    def __init__(self, coupon, par=0, issue="", maturity=""):
+        self.__par__=par
+        self.__coupon__=dict()
+        if type(issue)==datetime.datetime:
+            self.__issue_date__ = issue
+            if issue < maturity:
+                self.__maturity_date__ = maturity
+            else:
+                print "Issue date must be before maturity."
+            ##Generate dict of cashflows for the bond
+            dt=maturity
+            while dt > issue:
+                self.__coupon__[dt]= coupon
+                dt-=relativedelta.relativedelta(months =+ 6)
+            self.__coupon__[self.__maturity_date__]+=self.__par__
+        else:
+            self.__coupon__ = coupon
+    
+    def __price_and_duration__(self, date, YCurve):
+        """ Given a yield curve on a date, find price of the bond:
+            Yield Curve must be appropriate to match bond (corp-corp, govt-govt)
+            Make sure yield curve is as of the date, otherwise not valid price"""
+        ##Make list with the cashflows, the time to the cashflows, 
+        ##and a list which will contain the discounted value of the cashflows
+        time_to_cashflows = [(x.year-date.year)*12+x.month-date.month for x in self.__coupon__.keys()]
+        cashflows = [self.__coupon__[T] for T in self.__coupon__.iterkeys()]
+        ##Remove cashflows that have already happened
+        removeindex=[]
+        for i in range(0, len(time_to_cashflows)):
+            if(time_to_cashflows[i] < 0):
+                removeindex.append(i)
+        removeindex.sort(reverse=True)
+        for idx in removeindex:
+            time_to_cashflows.pop(idx)
+            cashflows.pop(idx)
+        
+        prices = [0]*len(cashflows)
+        ##Interpolate the yields from semi-annual to monthly
+        monthly_interp=interpolate.interp1d([0] + YCurve.get_maturities(), [0]+ YCurve.get_zero_rates())
+        monthly_mats=range(0,int(max(YCurve.get_maturities()))*12+1)
+        monthly_mats=[x/12. for x in monthly_mats]
+        monthly_ylds=monthly_interp(monthly_mats)
+        ##put a discounted value for each cashflow into the prices list
+        for x in range(0, len(cashflows)):
+            if(time_to_cashflows[x] <=max(monthly_mats)):
+                ##Need to search the monthly_mats list for the right index
+                index=monthly_mats.index(time_to_cashflows[x])
+                prices[x]=cashflows[x]*math.exp(-1*monthly_ylds[index]*float(time_to_cashflows[x])/12)
+            else:
+                ##If yield curve doesn't go far enough for last cashflow, use longest dated maturity
+                yld=monthly_ylds[max(monthly_mats)]
+                prices[x]=cashflows[x]*math.exp(-1*yld*float(time_to_cashflows[x])/12)
+        
+        bondprice=sum(prices)
+        duration=(1./bondprice)*sum([(float(time_to_cashflows[i])/12)*prices[i] for i in range(len(prices))])
+        return bondprice, duration
+        
+    def get_price(self, date, YCurve):
+        """ Given a yield curve on a date, find price of the bond:
+            Yield Curve must be appropriate to match bond (corp-corp, govt-govt)
+            Make sure yield curve is as of the date, otherwise not valid price"""
+        (price, duration)=self.__price_and_duration__(date, YCurve)
+        return price
+
+    def get_duration(self, date, YCurve):
+        """ Given a yield curve on a date, find duration of the bond (this method largely the same as price):
+            Yield Curve must be appropriate to match bond (corp-corp, govt-govt)
+            Make sure yield curve is as of the date given, otherwise not valid duration"""
+        (price, duration) = self.__price_and_duration__(date, YCurve)
+        return duration
