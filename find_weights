@@ -1,0 +1,30 @@
+def doLDI(duration, funds, f_durations):
+    ##duration is float
+    ##funds is list
+    ##f_durations is list of same size as funds
+    weight=[]
+    fund_order, f_durations = (list(x) for x in zip(*sorted(zip(funds, f_durations))))    
+    f_durations.sort()
+    f_durations.reverse()
+    if min(f_durations)>duration:
+        weight=[0]*(len(funds)-1) +[1]
+        return weight
+    else:
+        knock=0
+        i=1
+        start=0
+        while knock==0:
+            if f_durations[i]>duration:
+                start+=1
+                weight.append(0)
+                i+=1
+            else:
+                knock+=1
+        longweight=(float(duration-f_durations[start+1])/(f_durations[start]-f_durations[start+1]))
+        shortweight=1-longweight
+        weight.append(longweight)
+        weight.append(shortweight)
+        if len(weight)<len(funds):
+            additions=len(funds)-len(weight)
+            weight=weight+[0]*additions
+        return weight
