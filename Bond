@@ -1,7 +1,7 @@
 import datetime
 from dateutil import relativedelta
-import math
 from scipy import interpolate
+import numpy as np
 
 class Bond(object):
     """ Bond object. 
@@ -31,13 +31,16 @@ class Bond(object):
         else:
             self.__coupon__ = coupon
     
+    def get_coupon_dates(self):
+        return self.__coupon__.keys()
+    
     def __price_and_duration__(self, date, YCurve):
         """ Given a yield curve on a date, find price of the bond:
             Yield Curve must be appropriate to match bond (corp-corp, govt-govt)
             Make sure yield curve is as of the date, otherwise not valid price"""
         ##Make list with the cashflows, the time to the cashflows, 
         ##and a list which will contain the discounted value of the cashflows
-        time_to_cashflows = [(x.year-date.year)*12+x.month-date.month for x in self.__coupon__.keys()]
+        time_to_cashflows = [((x.year-date.year)*12+x.month-date.month)/12. for x in self.__coupon__.keys()]
         cashflows = [self.__coupon__[T] for T in self.__coupon__.iterkeys()]
         ##Remove cashflows that have already happened
         removeindex=[]
@@ -46,28 +49,23 @@ class Bond(object):
                 removeindex.append(i)
         removeindex.sort(reverse=True)
         for idx in removeindex:
-            time_to_cashflows.pop(idx)
-            cashflows.pop(idx)
+            r1=time_to_cashflows.pop(idx)
+            r1=cashflows.pop(idx)
         
-        prices = [0]*len(cashflows)
-        ##Interpolate the yields from semi-annual to monthly
-        monthly_interp=interpolate.interp1d([0] + YCurve.get_maturities(), [0]+ YCurve.get_zero_rates())
-        monthly_mats=range(0,int(max(YCurve.get_maturities()))*12+1)
-        monthly_mats=[x/12. for x in monthly_mats]
-        monthly_ylds=monthly_interp(monthly_mats)
-        ##put a discounted value for each cashflow into the prices list
-        for x in range(0, len(cashflows)):
-            if(time_to_cashflows[x] <=max(monthly_mats)):
-                ##Need to search the monthly_mats list for the right index
-                index=monthly_mats.index(time_to_cashflows[x])
-                prices[x]=cashflows[x]*math.exp(-1*monthly_ylds[index]*float(time_to_cashflows[x])/12)
-            else:
-                ##If yield curve doesn't go far enough for last cashflow, use longest dated maturity
-                yld=monthly_ylds[max(monthly_mats)]
-                prices[x]=cashflows[x]*math.exp(-1*yld*float(time_to_cashflows[x])/12)
+        ##Interpolate yields
+        spt=interpolate.interp1d(YCurve.get_maturities(), YCurve.get_spot_rates(), fill_value="extrapolate", kind="nearest")
+        spts=-1*spt(time_to_cashflows)
+        PVs=[1 for t in cashflows]
+        dur=[1 for t in cashflows]
         
-        bondprice=sum(prices)
-        duration=(1./bondprice)*sum([(float(time_to_cashflows[i])/12)*prices[i] for i in range(len(prices))])
+        prc_mat=np.matrix([time_to_cashflows, cashflows, spts, PVs, dur])
+        ##Calculate present values of cashflows
+        prc_mat[3,:]=np.multiply(prc_mat[1,:],np.exp(np.multiply(prc_mat[2,:],prc_mat[0,:])))
+        ##calculate individual durations:
+        prc_mat[4,:]=np.multiply(prc_mat[3,:], prc_mat[0,:])
+        
+        bondprice=np.sum(prc_mat[3,:])
+        duration=(1./bondprice)*np.sum(prc_mat[4,:])
         return bondprice, duration
         
     def get_price(self, date, YCurve):
@@ -83,3 +81,32 @@ class Bond(object):
             Make sure yield curve is as of the date given, otherwise not valid duration"""
         (price, duration) = self.__price_and_duration__(date, YCurve)
         return duration
+
+class Annuity(Bond):
+    """
+    Extension of Bond object. Pays constant cashflows
+    """
+    def __init__(self, start, num_payments, freq='M'):
+        """
+        start is datetime for when first payment is made
+        num_payments is an integer value for number of payments
+        freq is the frequency of payments. Default to M for monthly or A for annual
+        """
+        self.__par__=0
+        self.__coupon__=dict()
+        ##Set payment frequency
+        if freq=='M':
+            increment = 1
+            cpn=1./12
+        elif freq=='A':
+            increment=12
+            cpn=1
+        else:
+            raise ValueError("Frequency must be 'M' for monthly payments or 'A' for annual")
+        
+        dateref=start
+        counter=0
+        while counter<num_payments:
+            self.__coupon__[dateref]=cpn
+            counter+=1
+            dateref+=relativedelta.relativedelta(months=+increment)
